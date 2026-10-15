@@ -1,0 +1,51 @@
+name: Build and test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: go.mod is tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check that go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || { echo "::error::go.mod and go.sum aren't tidy. Run 'go mod tidy' and commit the result."; exit 1; }
+
+  lint:
+    name: Go lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # gofmt, goimports, errcheck, govet, staticcheck, unused and ineffassign, with .golangci.yml.
+      # A public repo can't use the private shared-actions, so this runs golangci-lint directly.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
+          version: v2.14.0
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Vet the Go code
+        run: go vet ./...
+      - name: Run the tests
+        run: go test -race ./...

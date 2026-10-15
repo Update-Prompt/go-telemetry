@@ -1,0 +1,60 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Weekly, so newly published vulnerabilities are found even without changes
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # A public repo can't use the private shared-actions, so this runs gitleaks directly
+      - name: Install gitleaks
+        env:
+          # renovate: datasource=github-releases depName=gitleaks/gitleaks
+          GITLEAKS_VERSION: v8.30.1
+        run: |
+          version="${GITLEAKS_VERSION#v}"
+          base="https://github.com/gitleaks/gitleaks/releases/download/$GITLEAKS_VERSION"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "$base/gitleaks_${version}_linux_x64.tar.gz"
+          curl -fsSLO "$base/gitleaks_${version}_checksums.txt"
+          sha256sum --check --ignore-missing "gitleaks_${version}_checksums.txt"
+          tar -xzf "gitleaks_${version}_linux_x64.tar.gz" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # Pull requests scan their own commits, other runs the whole history. Findings are redacted.
+      - name: Scan for secrets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$BASE_SHA" ]; then
+            gitleaks git --no-banner --redact --log-opts="$BASE_SHA..$HEAD_SHA" .
+          else
+            gitleaks git --no-banner --redact .
+          fi
+
+  govulncheck:
+    name: vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Fails when the code calls a function with a known vulnerability
+      - uses: golang/govulncheck-action@v1
+        with:
+          repo-checkout: false
+          # Scan with the Go version from go.mod. The action defaults to "stable",
+          # which would override go-version-file.
+          go-version-input: ''
+          go-version-file: go.mod
