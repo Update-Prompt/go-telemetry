@@ -1,0 +1,22 @@
+# Copy of the shared config in Update-Prompt/shared-actions (go-lint/golangci.yml).
+# This public repo can't use the private shared-actions, so keep the two in step.
+# https://golangci-lint.run/docs/configuration/file/
+version: "2"
+
+run:
+  # Report paths relative to the module, not to this file, so annotations land on the right lines
+  relative-path-mode: wd
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck and unused
+  default: standard
+  exclusions:
+    presets:
+      # Unchecked errors from Close, Flush, os.Setenv, fmt.Print and similar, which are rarely actionable
+      - std-error-handling
+      - common-false-positives
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

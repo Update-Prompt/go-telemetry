@@ -27,8 +27,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # gofmt, goimports, errcheck, govet, staticcheck, unused and ineffassign, with the shared config
-      - uses: Update-Prompt/shared-actions/go-lint@v1
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # gofmt, goimports, errcheck, govet, staticcheck, unused and ineffassign, with .golangci.yml.
+      # A public repo can't use the private shared-actions, so this runs golangci-lint directly.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          # renovate: datasource=github-releases depName=golangci/golangci-lint
+          version: v2.14.0
 
   test:
     name: tests

@@ -62,4 +62,4 @@ The other standard `OTEL_EXPORTER_OTLP_*` variables, such as headers and timeout
 go test ./...
 ```
 
-Lint with the shared config in [shared-actions](https://github.com/Update-Prompt/shared-actions) (`go-lint/golangci.yml`). Releases are tags (`vX.Y.Z`); services pin a version in their `go.mod`.
+Lint with `.golangci.yml`, a copy of the shared config in shared-actions (`go-lint/golangci.yml`); keep the two in step. Releases are tags (`vX.Y.Z`); services pin a version in their `go.mod`.
