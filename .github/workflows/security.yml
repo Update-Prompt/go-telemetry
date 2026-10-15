@@ -1,0 +1,34 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Weekly, so newly published vulnerabilities are found even without changes
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Update-Prompt/shared-actions/secret-scan@v1
+
+  govulncheck:
+    name: vulnerabilities
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Fails when the code calls a function with a known vulnerability
+      - uses: golang/govulncheck-action@v1
+        with:
+          repo-checkout: false
+          # Scan with the Go version from go.mod. The action defaults to "stable",
+          # which would override go-version-file.
+          go-version-input: ''
+          go-version-file: go.mod
