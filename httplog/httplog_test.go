@@ -105,6 +105,29 @@ func TestHTTPLogsAPanicAfterTheAnswerAsAnError(t *testing.T) {
 	}
 }
 
+// Given a handler that sends 103 Early Hints, then answers 500
+// When it is requested
+// Then the request is logged at error with the final status
+func TestHTTPLogsTheFinalStatus(t *testing.T) {
+	_, logs := serve(t, false, nil, "/v1/hints-then-fails")
+
+	if line := logs.String(); !strings.Contains(line, "level=ERROR msg=\"Answered a request\"") ||
+		!strings.Contains(line, "http.response.status_code=500") {
+		t.Errorf("Expected the 500 at error, got %q", line)
+	}
+}
+
+// Given a handler that flushes its answer
+// When it is requested
+// Then the writer it gets is still an http.Flusher
+func TestHTTPKeepsTheWritersInterfaces(t *testing.T) {
+	recorder, _ := serve(t, false, nil, "/v1/flushes")
+
+	if recorder.Body.String() != "flushed" {
+		t.Errorf("Expected the handler to flush, got %q", recorder.Body.String())
+	}
+}
+
 // Given a request with a caller's traceparent header
 // When an internal and a public service answer it
 // Then the internal one keeps the caller's trace id and the public one starts its own
@@ -151,6 +174,19 @@ func serve(
 		httplog.LogAttrs(request, slog.String("user_id", "user_1"))
 		slog.ErrorContext(request.Context(), "Failed to read a user")
 		writer.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/v1/hints-then-fails", func(writer http.ResponseWriter, request *http.Request) {
+		writer.WriteHeader(http.StatusEarlyHints)
+		writer.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/v1/flushes", func(writer http.ResponseWriter, request *http.Request) {
+		flusher, ok := writer.(http.Flusher)
+		if !ok {
+			writer.WriteHeader(http.StatusNotImplemented)
+			return
+		}
+		_, _ = writer.Write([]byte("flushed"))
+		flusher.Flush()
 	})
 	mux.HandleFunc("/v1/panics", func(writer http.ResponseWriter, request *http.Request) {
 		panic("nil map")

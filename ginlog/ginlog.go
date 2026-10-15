@@ -17,13 +17,17 @@ import (
 // Middleware returns the middleware that traces each request and logs it at the
 // level for how it ended. When public is set, the trace id a caller sends is
 // ignored and each request starts its own trace. onPanic answers a request whose
-// handler panicked, after the panic is logged.
+// handler panicked, after the panic is logged, unless the handler had started its
+// answer; a plain 500 when nil.
 func Middleware(
 	serviceName string,
 	public bool,
 	levels telemetry.RequestLevels,
 	onPanic func(*gin.Context),
 ) []gin.HandlerFunc {
+	if onPanic == nil {
+		onPanic = func(ctx *gin.Context) { ctx.AbortWithStatus(http.StatusInternalServerError) }
+	}
 	options := []otelgin.Option{otelgin.WithFilter(func(request *http.Request) bool {
 		return request.URL.Path != telemetry.HealthPath
 	})}
@@ -68,6 +72,8 @@ func logRequests(levels telemetry.RequestLevels, onPanic func(*gin.Context)) gin
 				if !ctx.Writer.Written() {
 					onPanic(ctx)
 				}
+				// The handlers after the one that panicked don't run
+				ctx.Abort()
 			}
 			if ctx.Request.URL.Path == telemetry.HealthPath {
 				return

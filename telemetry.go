@@ -38,6 +38,9 @@ func Setup(ctx context.Context, serviceName, level string) (Shutdown, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkProtocol(); err != nil {
+		return nil, err
+	}
 	// OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES override the defaults
 	serviceResource, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceName(serviceName)),
@@ -45,8 +48,26 @@ func Setup(ctx context.Context, serviceName, level string) (Shutdown, error) {
 		resource.WithTelemetrySDK(),
 		resource.WithFromEnv(),
 	)
-	if err != nil {
+	// A partial resource, such as without the host name, still describes the service
+	if err != nil && !errors.Is(err, resource.ErrPartialResource) {
 		return nil, fmt.Errorf("describing the service for its logs: %w", err)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "OpenTelemetry:", err)
+	}
+
+	// Created first, so a failure leaves OpenTelemetry's globals as they were
+	var loggerProvider *sdklog.LoggerProvider
+	if exportsLogs() {
+		// OTLP over HTTP; OTEL_EXPORTER_OTLP_* set the endpoint, headers and timeouts
+		exporter, err := otlploghttp.New(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("creating the OTLP log exporter: %w", err)
+		}
+		loggerProvider = sdklog.NewLoggerProvider(
+			sdklog.WithResource(serviceResource),
+			sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
+		)
 	}
 
 	// The sampler drops every span, so none is recorded, but each still gets ids
@@ -63,16 +84,7 @@ func Setup(ctx context.Context, serviceName, level string) (Shutdown, error) {
 	shutdowns := []Shutdown{tracerProvider.Shutdown}
 
 	var handler slog.Handler
-	if exportsLogs() {
-		// OTLP over HTTP; OTEL_EXPORTER_OTLP_* set the endpoint, headers and timeouts
-		exporter, err := otlploghttp.New(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("creating the OTLP log exporter: %w", err)
-		}
-		loggerProvider := sdklog.NewLoggerProvider(
-			sdklog.WithResource(serviceResource),
-			sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
-		)
+	if loggerProvider != nil {
 		shutdowns = append(shutdowns, loggerProvider.Shutdown)
 		// The bridge adds the trace and span ids to each record itself
 		handler = &contextHandler{
@@ -97,6 +109,20 @@ func Setup(ctx context.Context, serviceName, level string) (Shutdown, error) {
 func exportsLogs() bool {
 	return os.Getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") != "" ||
 		os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != ""
+}
+
+// checkProtocol refuses an OTLP protocol other than HTTP with protobuf, the only
+// one Setup sends logs with, so they aren't lost to a gRPC endpoint
+func checkProtocol() error {
+	for _, name := range []string{"OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "OTEL_EXPORTER_OTLP_PROTOCOL"} {
+		if protocol := os.Getenv(name); protocol != "" {
+			if protocol != "http/protobuf" {
+				return fmt.Errorf("%s is %q; the logs are sent with http/protobuf only", name, protocol)
+			}
+			return nil
+		}
+	}
+	return nil
 }
 
 // ParseLevel reads a LOG_LEVEL value: debug, info, warn (or warning) or error, in

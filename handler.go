@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"regexp"
@@ -82,8 +83,11 @@ func redactEmails(value string) string {
 	return emailPattern.ReplaceAllString(value, "<email>")
 }
 
-// redactAttr replaces the email addresses in attr's string values, in groups too
+// redactAttr replaces the email addresses in attr's values, in groups too. A
+// value that isn't a string, such as a Stringer or a slice, becomes its text when
+// that holds an address.
 func redactAttr(attr slog.Attr) slog.Attr {
+	attr.Value = attr.Value.Resolve()
 	switch attr.Value.Kind() {
 	case slog.KindString:
 		return slog.String(attr.Key, redactEmails(attr.Value.String()))
@@ -97,6 +101,11 @@ func redactAttr(attr slog.Attr) slog.Attr {
 	case slog.KindAny:
 		if err, ok := attr.Value.Any().(error); ok {
 			return slog.String(attr.Key, redactEmails(err.Error()))
+		}
+		if text := fmt.Sprint(attr.Value.Any()); strings.Contains(text, "@") {
+			if redacted := redactEmails(text); redacted != text {
+				return slog.String(attr.Key, redacted)
+			}
 		}
 	}
 	return attr

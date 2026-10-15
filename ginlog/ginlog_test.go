@@ -103,6 +103,31 @@ func TestGinLogsAPanicAfterTheAnswerAsAnError(t *testing.T) {
 	}
 }
 
+// Given a middleware that panics before the handler of its route
+// When the route is requested, with no onPanic given
+// Then the answer is a 500 and the handler doesn't run
+func TestGinStopsTheChainAfterAPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	logs := testlogs.Use(t, slog.LevelInfo)
+	router := gin.New()
+	router.Use(ginlog.Middleware("test-service", false, telemetry.RequestLevels{}, nil)...)
+	ran := false
+	router.GET("/v1/guarded", func(ctx *gin.Context) { panic("nil map") }, func(ctx *gin.Context) {
+		ran = true
+		ctx.Status(http.StatusOK)
+	})
+
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/guarded", nil))
+
+	if ran || recorder.Code != http.StatusInternalServerError {
+		t.Errorf("Expected a 500 without the handler, got %d and ran=%v", recorder.Code, ran)
+	}
+	if !strings.Contains(logs.String(), "http.response.status_code=500") {
+		t.Errorf("Expected the failed request in the logs, got %q", logs.String())
+	}
+}
+
 // Given a request with a caller's traceparent header
 // When an internal service and a public service answer it
 // Then the internal one logs the caller's trace id and the public one starts its own trace

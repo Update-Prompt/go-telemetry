@@ -3,11 +3,13 @@
 package httplog
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/propagation"
 
@@ -29,7 +31,8 @@ type Options struct {
 }
 
 // Handler returns handler, tracing each request and logging it at the level for
-// how it ended
+// how it ended. The line has the route that matched (http.route) when handler is
+// the http.ServeMux itself, which sets it on the request.
 func Handler(handler http.Handler, serviceName string, options Options) http.Handler {
 	if options.Path == nil {
 		options.Path = func(request *http.Request) string { return request.URL.Path }
@@ -62,7 +65,35 @@ func LogAttrs(request *http.Request, attrs ...slog.Attr) {
 func logRequests(handler http.Handler, options Options) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		start := time.Now()
-		recorder := &statusRecorder{ResponseWriter: writer}
+		var status int
+		// Keeps the writer's other interfaces, such as http.Flusher and http.Hijacker
+		recorder := httpsnoop.Wrap(writer, httpsnoop.Hooks{
+			WriteHeader: func(next httpsnoop.WriteHeaderFunc) httpsnoop.WriteHeaderFunc {
+				return func(code int) {
+					// 1xx answers, such as 103 Early Hints, come before the final one
+					if status == 0 && code >= http.StatusOK {
+						status = code
+					}
+					next(code)
+				}
+			},
+			Write: func(next httpsnoop.WriteFunc) httpsnoop.WriteFunc {
+				return func(body []byte) (int, error) {
+					if status == 0 {
+						status = http.StatusOK
+					}
+					return next(body)
+				}
+			},
+			ReadFrom: func(next httpsnoop.ReadFromFunc) httpsnoop.ReadFromFunc {
+				return func(source io.Reader) (int64, error) {
+					if status == 0 {
+						status = http.StatusOK
+					}
+					return next(source)
+				}
+			},
+		})
 		// Where the handlers add attributes, such as the user id
 		request = request.WithContext(telemetry.WithRequest(request.Context()))
 		defer func() {
@@ -72,14 +103,13 @@ func logRequests(handler http.Handler, options Options) http.Handler {
 					panic(recovered)
 				}
 				telemetry.LogPanic(request.Context(), recovered)
-				if recorder.status == 0 {
+				if status == 0 {
 					options.OnPanic(recorder)
 				}
 			}
 			if request.URL.Path == telemetry.HealthPath {
 				return
 			}
-			status := recorder.status
 			if status == 0 {
 				status = http.StatusOK
 			}
@@ -103,29 +133,4 @@ func route(pattern string) string {
 		return pattern[start:]
 	}
 	return ""
-}
-
-// statusRecorder remembers the status a handler answered with
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (recorder *statusRecorder) WriteHeader(status int) {
-	if recorder.status == 0 {
-		recorder.status = status
-	}
-	recorder.ResponseWriter.WriteHeader(status)
-}
-
-func (recorder *statusRecorder) Write(body []byte) (int, error) {
-	if recorder.status == 0 {
-		recorder.status = http.StatusOK
-	}
-	return recorder.ResponseWriter.Write(body)
-}
-
-// Unwrap lets http.ResponseController reach the writer's other methods, such as Flush
-func (recorder *statusRecorder) Unwrap() http.ResponseWriter {
-	return recorder.ResponseWriter
 }

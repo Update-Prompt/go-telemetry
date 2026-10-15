@@ -124,6 +124,26 @@ func TestLogsHoldNoEmailAddresses(t *testing.T) {
 	}
 }
 
+func TestLogsHoldNoEmailAddressesInOtherValues(t *testing.T) {
+	// Given values that aren't strings but hold email addresses
+	logs := testlogs.Use(t, slog.LevelInfo)
+
+	// When they are logged
+	slog.Info("Sent", "user", userValue{email: "ada@example.com"},
+		"to", stringer{text: "grace@example.org"}, "cc", []string{"alan@example.net"}, "tries", []int{1, 2})
+
+	// Then no address is left, and the other values are as they were
+	line := logs.String()
+	for _, address := range []string{"ada@", "grace@", "alan@"} {
+		if strings.Contains(line, address) {
+			t.Errorf("Expected no %s in %q", address, line)
+		}
+	}
+	if !strings.Contains(line, "tries=\"[1 2]\"") {
+		t.Errorf("Expected the tries as they were in %q", line)
+	}
+}
+
 // Given text logs
 // When a record is written outside a request
 // Then it carries no request or trace id
@@ -193,6 +213,18 @@ func TestSetupExportsOverOTLP(t *testing.T) {
 	}
 }
 
+// Given an OTLP endpoint and the gRPC protocol
+// When the logs are set up
+// Then the setup fails, since logs are sent over HTTP only
+func TestSetupRefusesTheGRPCProtocol(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+	t.Setenv("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc")
+
+	if _, err := telemetry.Setup(context.Background(), "test-service", "info"); err == nil {
+		t.Error("Expected the gRPC protocol to be refused")
+	}
+}
+
 // Given an unknown level
 // When the logs are set up
 // Then the setup fails
@@ -201,3 +233,17 @@ func TestSetupRefusesAnUnknownLevel(t *testing.T) {
 		t.Error("Expected an unknown level to be refused")
 	}
 }
+
+// Helpers
+
+// userValue logs as a group with the user's email address
+type userValue struct{ email string }
+
+func (user userValue) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("email", user.email))
+}
+
+// stringer prints as its text
+type stringer struct{ text string }
+
+func (value stringer) String() string { return value.text }
