@@ -63,3 +63,5 @@ go test ./...
 ```
 
 Lint with `.golangci.yml`, a copy of the shared config in shared-actions (`go-lint/golangci.yml`); keep the two in step. Releases are tags (`vX.Y.Z`); services pin a version in their `go.mod`.
+
+[Renovate](https://docs.renovatebot.com/) keeps the Go modules and the workflows' actions and tools up to date, with the shared Update Prompt preset (`renovate.json`): weekly pull requests, and security fixes right away.
