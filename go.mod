@@ -1,6 +1,6 @@
 module github.com/Update-Prompt/go-telemetry
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/felixge/httpsnoop v1.1.0
