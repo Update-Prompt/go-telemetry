@@ -103,28 +103,39 @@ func TestGinLogsAPanicAfterTheAnswerAsAnError(t *testing.T) {
 	}
 }
 
-// Given a middleware that panics before the handler of its route
-// When the route is requested, with no onPanic given
+// Given a middleware that panics before the handler of its route, with no onPanic given,
+// and with an onPanic that answers 500 without aborting
+// When the route is requested
 // Then the answer is a 500 and the handler doesn't run
 func TestGinStopsTheChainAfterAPanic(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	logs := testlogs.Use(t, slog.LevelInfo)
-	router := gin.New()
-	router.Use(ginlog.Middleware("test-service", false, telemetry.RequestLevels{}, nil)...)
-	ran := false
-	router.GET("/v1/guarded", func(ctx *gin.Context) { panic("nil map") }, func(ctx *gin.Context) {
-		ran = true
-		ctx.Status(http.StatusOK)
-	})
-
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/guarded", nil))
-
-	if ran || recorder.Code != http.StatusInternalServerError {
-		t.Errorf("Expected a 500 without the handler, got %d and ran=%v", recorder.Code, ran)
+	onPanics := map[string]func(*gin.Context){
+		"no onPanic": nil,
+		"an onPanic that doesn't abort": func(ctx *gin.Context) {
+			ctx.Status(http.StatusInternalServerError)
+		},
 	}
-	if !strings.Contains(logs.String(), "http.response.status_code=500") {
-		t.Errorf("Expected the failed request in the logs, got %q", logs.String())
+	for name, onPanic := range onPanics {
+		t.Run(name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			logs := testlogs.Use(t, slog.LevelInfo)
+			router := gin.New()
+			router.Use(ginlog.Middleware("test-service", false, telemetry.RequestLevels{}, onPanic)...)
+			ran := false
+			router.GET("/v1/guarded", func(ctx *gin.Context) { panic("nil map") }, func(ctx *gin.Context) {
+				ran = true
+				ctx.Status(http.StatusOK)
+			})
+
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/guarded", nil))
+
+			if ran || recorder.Code != http.StatusInternalServerError {
+				t.Errorf("Expected a 500 without the handler, got %d and ran=%v", recorder.Code, ran)
+			}
+			if !strings.Contains(logs.String(), "http.response.status_code=500") {
+				t.Errorf("Expected the failed request in the logs, got %q", logs.String())
+			}
+		})
 	}
 }
 
