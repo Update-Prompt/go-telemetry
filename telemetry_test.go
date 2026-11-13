@@ -173,43 +173,44 @@ func TestLogsBelowTheLevelAreDropped(t *testing.T) {
 	}
 }
 
+// Given an OTLP endpoint
+// When the service logs an error and shuts down
+// Then the record went to the endpoint
 func TestSetupExportsOverOTLP(t *testing.T) {
-	// Given an OTLP endpoint
-	var exports atomic.Int32
-	collector := httptest.NewServer(
-		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-			if request.Method == http.MethodPost && request.URL.Path == "/v1/logs" {
-				_, _ = io.Copy(io.Discard, request.Body)
-				exports.Add(1)
-			}
-			writer.WriteHeader(http.StatusOK)
-		}),
-	)
-	defer collector.Close()
-	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
-	previousLogger, previousProvider := slog.Default(), otel.GetTracerProvider()
-	previousPropagator := otel.GetTextMapPropagator()
-	defer func() {
-		slog.SetDefault(previousLogger)
-		otel.SetTracerProvider(previousProvider)
-		otel.SetTextMapPropagator(previousPropagator)
-	}()
+	exports := setUpWithCollector(t, "info", func() {
+		slog.Error("Failed to read the queue", "error", "connection refused")
+	})
 
-	// When the service logs and shuts down
-	shutdown, err := telemetry.Setup(context.Background(), "test-service", "info")
-	if err != nil {
-		t.Fatalf("Expected the setup to succeed, got %v", err)
-	}
-	slog.Error("Failed to read the queue", "error", "connection refused")
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := shutdown(ctx); err != nil {
-		t.Fatalf("Expected the shutdown to succeed, got %v", err)
-	}
-
-	// Then the record went to the endpoint
-	if exports.Load() == 0 {
+	if exports == 0 {
 		t.Error("Expected the logs to be exported to the OTLP endpoint")
+	}
+}
+
+// Given an OTLP endpoint and the warn level
+// When the service logs at info and shuts down
+// Then nothing is exported
+func TestSetupExportsOnlyAtTheLevel(t *testing.T) {
+	exports := setUpWithCollector(t, "warn", func() {
+		slog.Info("Started the service")
+	})
+
+	if exports != 0 {
+		t.Errorf("Expected no export below the level, got %d", exports)
+	}
+}
+
+// Given a request's context and a logger with a group
+// When it logs an email address
+// Then the address is replaced, and the record still carries the request's attributes
+func TestGroupedLogsKeepTheRequestAndRedaction(t *testing.T) {
+	logs := testlogs.Use(t, slog.LevelInfo)
+	ctx := telemetry.WithLogAttrs(context.Background(), slog.String("request_id", "req_1"))
+
+	slog.Default().WithGroup("mail").InfoContext(ctx, "Sent", "to", "ada@example.com")
+
+	line := logs.String()
+	if !strings.Contains(line, "mail.to=<email>") || !strings.Contains(line, "req_1") {
+		t.Errorf("Expected the redacted address and the request id, got %q", line)
 	}
 }
 
@@ -247,3 +248,40 @@ func (user userValue) LogValue() slog.Value {
 type stringer struct{ text string }
 
 func (value stringer) String() string { return value.text }
+
+// setUpWithCollector sets up the logs at level with an OTLP endpoint, runs log, shuts
+// the logs down, and returns how many exports the endpoint got
+func setUpWithCollector(t *testing.T, level string, log func()) int32 {
+	t.Helper()
+	var exports atomic.Int32
+	collector := httptest.NewServer(
+		http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method == http.MethodPost && request.URL.Path == "/v1/logs" {
+				_, _ = io.Copy(io.Discard, request.Body)
+				exports.Add(1)
+			}
+			writer.WriteHeader(http.StatusOK)
+		}),
+	)
+	defer collector.Close()
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
+	previousLogger, previousProvider := slog.Default(), otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	shutdown, err := telemetry.Setup(context.Background(), "test-service", level)
+	if err != nil {
+		t.Fatalf("Expected the setup to succeed, got %v", err)
+	}
+	log()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := shutdown(ctx); err != nil {
+		t.Fatalf("Expected the shutdown to succeed, got %v", err)
+	}
+	return exports.Load()
+}
