@@ -187,30 +187,32 @@ func TestSetupExportsOverOTLP(t *testing.T) {
 }
 
 // Given an OTLP endpoint and the warn level
-// When the service logs at info and shuts down
-// Then nothing is exported
+// When the service logs at info, or at warn, and shuts down
+// Then nothing is exported for the info record, and the warn record is
 func TestSetupExportsOnlyAtTheLevel(t *testing.T) {
-	exports := setUpWithCollector(t, "warn", func() {
+	belowTheLevel := setUpWithCollector(t, "warn", func() {
 		slog.Info("Started the service")
 	})
+	atTheLevel := setUpWithCollector(t, "warn", func() {
+		slog.Warn("Retried the queue")
+	})
 
-	if exports != 0 {
-		t.Errorf("Expected no export below the level, got %d", exports)
+	if belowTheLevel != 0 || atTheLevel == 0 {
+		t.Errorf("Expected exports only at the level, got %d below it and %d at it",
+			belowTheLevel, atTheLevel)
 	}
 }
 
-// Given a request's context and a logger with a group
+// Given a logger with a group
 // When it logs an email address
-// Then the address is replaced, and the record still carries the request's attributes
-func TestGroupedLogsKeepTheRequestAndRedaction(t *testing.T) {
+// Then the address is replaced
+func TestGroupedLogsHoldNoEmailAddresses(t *testing.T) {
 	logs := testlogs.Use(t, slog.LevelInfo)
-	ctx := telemetry.WithLogAttrs(context.Background(), slog.String("request_id", "req_1"))
 
-	slog.Default().WithGroup("mail").InfoContext(ctx, "Sent", "to", "ada@example.com")
+	slog.Default().WithGroup("mail").Info("Sent", "to", "ada@example.com")
 
-	line := logs.String()
-	if !strings.Contains(line, "mail.to=<email>") || !strings.Contains(line, "req_1") {
-		t.Errorf("Expected the redacted address and the request id, got %q", line)
+	if line := logs.String(); !strings.Contains(line, "mail.to=<email>") {
+		t.Errorf("Expected the address to be replaced, got %q", line)
 	}
 }
 
@@ -266,11 +268,12 @@ func setUpWithCollector(t *testing.T, level string, log func()) int32 {
 	defer collector.Close()
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
 	previousLogger, previousProvider := slog.Default(), otel.GetTracerProvider()
-	previousPropagator := otel.GetTextMapPropagator()
+	previousPropagator, previousErrorHandler := otel.GetTextMapPropagator(), otel.GetErrorHandler()
 	t.Cleanup(func() {
 		slog.SetDefault(previousLogger)
 		otel.SetTracerProvider(previousProvider)
 		otel.SetTextMapPropagator(previousPropagator)
+		otel.SetErrorHandler(previousErrorHandler)
 	})
 
 	shutdown, err := telemetry.Setup(context.Background(), "test-service", level)

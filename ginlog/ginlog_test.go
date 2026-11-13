@@ -104,7 +104,7 @@ func TestGinLogsAPanicAfterTheAnswerAsAnError(t *testing.T) {
 }
 
 // Given a middleware that panics before the handler of its route, with no onPanic given,
-// and with an onPanic that answers 500 without aborting
+// and with an onPanic that answers 500, with or without a body, without aborting
 // When the route is requested
 // Then the answer is a 500 and the handler doesn't run
 func TestGinStopsTheChainAfterAPanic(t *testing.T) {
@@ -112,6 +112,9 @@ func TestGinStopsTheChainAfterAPanic(t *testing.T) {
 		"no onPanic": nil,
 		"an onPanic that doesn't abort": func(ctx *gin.Context) {
 			ctx.Status(http.StatusInternalServerError)
+		},
+		"an onPanic that writes and doesn't abort": func(ctx *gin.Context) {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"code": "INTERNAL_ERROR"})
 		},
 	}
 	for name, onPanic := range onPanics {
